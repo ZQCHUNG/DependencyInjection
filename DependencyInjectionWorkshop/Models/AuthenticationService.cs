@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using Dapper;
+using SlackAPI;
 
 namespace DependencyInjectionWorkshop.Models
 {
@@ -24,12 +25,21 @@ namespace DependencyInjectionWorkshop.Models
         /// <param name="password"></param>
         /// <param name="otp"></param>
         /// <returns></returns>
-        public bool Verify(string accountId,string password,string otp)
+        public bool Verify(string accountId, string password, string otp)
         {
+            var httpClient = new HttpClient() { BaseAddress = new Uri("http://joey.com/") };
+            var isLockedResponse = httpClient.PostAsJsonAsync("api/failedCounter/IsLocked", accountId).Result;
+
+            isLockedResponse.EnsureSuccessStatusCode();
+            if (isLockedResponse.Content.ReadAsAsync<bool>().Result)
+            {
+                throw new FailedTooManyTimesException();
+            }
+
             string passwordFromDb;
             using (var connection = new SqlConnection("my connection string"))
             {
-                passwordFromDb = connection.Query<string>("spGetUserPassword",new {Id = accountId},
+                passwordFromDb = connection.Query<string>("spGetUserPassword", new { Id = accountId },
                     commandType: CommandType.StoredProcedure).SingleOrDefault();
             }
 
@@ -42,8 +52,7 @@ namespace DependencyInjectionWorkshop.Models
             }
             var hashedPassword = hash.ToString();
 
-            var httpClient = new HttpClient() {BaseAddress = new Uri("http://joey.com/")};
-            var response = httpClient.PostAsJsonAsync("api/otps",accountId).Result;
+            var response = httpClient.PostAsJsonAsync("api/otps", accountId).Result;
             if (response.IsSuccessStatusCode)
             {
             }
@@ -55,50 +64,37 @@ namespace DependencyInjectionWorkshop.Models
 
             if (hashedPassword == passwordFromDb && otp == currentOtp)
             {
+                var resetResponse = httpClient.PostAsJsonAsync("api/failedCounter/Reset", accountId).Result;
+
+                resetResponse.EnsureSuccessStatusCode();
+
                 return true;
             }
             else
             {
+                var addFailedCountResponse = httpClient.PostAsJsonAsync("api/failedCounter/Add", accountId).Result;
+
+                addFailedCountResponse.EnsureSuccessStatusCode();
+
+                var failedCountResponse =
+                    httpClient.PostAsJsonAsync("api/failedCounter/GetFailedCount", accountId).Result;
+
+                failedCountResponse.EnsureSuccessStatusCode();
+
+                var failedCount = failedCountResponse.Content.ReadAsAsync<int>().Result;
+                var logger = NLog.LogManager.GetCurrentClassLogger();
+                logger.Info($"accountId:{accountId} failed times:{failedCount}");
+
+                string message = $"{accountId}:驗證失敗";
+                var slackClient = new SlackClient("my api token");
+                slackClient.PostMessage(response1 => { }, "my channel", message, "my bot name");
+
                 return false;
             }
         }
+    }
 
-
-        public string GetPassword(string accountId)
-        {
-            using (var connection = new SqlConnection("my connection string"))
-            {
-                var password = connection.Query<string>("spGetUserPassword",new {Id = accountId},
-                    commandType: CommandType.StoredProcedure).SingleOrDefault();
-
-                return password;
-            }
-        }
-
-        public string GetHash(string plainText)
-        {
-            var crypt = new System.Security.Cryptography.SHA256Managed();
-            var hash = new StringBuilder();
-            var crypto = crypt.ComputeHash(Encoding.UTF8.GetBytes(plainText));
-            foreach (var theByte in crypto)
-            {
-                hash.Append(theByte.ToString("x2"));
-            }
-            return hash.ToString();
-        }
-
-        public string GetOtp(string accountId)
-        {
-            var httpClient = new HttpClient() {BaseAddress = new Uri("http://joey.com/")};
-            var response = httpClient.PostAsJsonAsync("api/otps",accountId).Result;
-            if (response.IsSuccessStatusCode)
-            {
-                return response.Content.ReadAsAsync<string>().Result;
-            }
-            else
-            {
-                throw new Exception($"web api error, accountId:{accountId}");
-            }
-        }
+    public class FailedTooManyTimesException : Exception
+    {
     }
 }
