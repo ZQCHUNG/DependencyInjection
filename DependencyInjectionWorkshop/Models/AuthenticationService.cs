@@ -1,144 +1,32 @@
 ﻿using System;
-using System.Data;
-using System.Data.SqlClient;
-using System.Linq;
-using System.Net.Http;
-using System.Text;
-using Dapper;
-using SlackAPI;
 
 namespace DependencyInjectionWorkshop.Models
 {
-    public class ProfileDao
-    {
-        public string GetPasswordFromDb(string accountId)
-        {
-
-            string passwordFromDb;
-            using (var connection = new SqlConnection("my connection string"))
-            {
-                passwordFromDb = connection.Query<string>("spGetUserPassword",new {Id = accountId},
-                    commandType: CommandType.StoredProcedure).SingleOrDefault();
-            }
-            return passwordFromDb;
-        }
-    }
-
-    public class FailedCounter
-    {
-        public bool GetAccountIsLock(string accountId)
-        {
-            var isLockedResponse = new HttpClient() { BaseAddress = new Uri("http://joey.com/") }.PostAsJsonAsync("api/failedCounter/IsLocked",accountId).Result;
-
-            isLockedResponse.EnsureSuccessStatusCode();
-            var isLock = isLockedResponse.Content.ReadAsAsync<bool>().Result;
-            return isLock;
-        }
-
-        public void ResetFailedCounter(string accountId)
-        {
-            var resetResponse = new HttpClient() { BaseAddress = new Uri("http://joey.com/") }.PostAsJsonAsync("api/failedCounter/Reset",accountId).Result;
-
-            resetResponse.EnsureSuccessStatusCode();
-        }
-
-        public void AddFailedCounter(string accountId)
-        {
-            var addFailedCountResponse = new HttpClient() { BaseAddress = new Uri("http://joey.com/") }.PostAsJsonAsync("api/failedCounter/Add",accountId).Result;
-
-            addFailedCountResponse.EnsureSuccessStatusCode();
-        }
-
-        public int GetFailedCount(string accountId)
-        {
-            var failedCountResponse =
-                new HttpClient() { BaseAddress = new Uri("http://joey.com/") }.PostAsJsonAsync("api/failedCounter/GetFailedCount",accountId).Result;
-
-            failedCountResponse.EnsureSuccessStatusCode();
-
-            var failedCount = failedCountResponse.Content.ReadAsAsync<int>().Result;
-            return failedCount;
-        }
-    }
-
-    public class SlackAdapter
-    {
-        public void Notify(string accountId)
-        {
-
-            string message = $"{accountId}:驗證失敗";
-            var slackClient = new SlackClient("my api token");
-            slackClient.PostMessage(response1 => { },"my channel",message,"my bot name");
-        }
-    }
-
-    public class Sha256Adapter
-    {
-        public string GetHashedPassword(string password)
-        {
-
-            var crypt = new System.Security.Cryptography.SHA256Managed();
-            var hash = new StringBuilder();
-            var crypto = crypt.ComputeHash(Encoding.UTF8.GetBytes(password));
-            foreach (var theByte in crypto)
-            {
-                hash.Append(theByte.ToString("x2"));
-            }
-            var hashedPassword = hash.ToString();
-            return hashedPassword;
-        }
-    }
-
-    public class OtpService
-    {
-        public OtpService()
-        {
-        }
-
-        public string GetCurrentOtp(string accountId)
-        {
-            var response = new HttpClient() { BaseAddress = new Uri("http://joey.com/") }.PostAsJsonAsync("api/otps",accountId).Result;
-            if (response.IsSuccessStatusCode)
-            {
-            }
-            else
-            {
-                throw new Exception($"web api error, accountId:{accountId}");
-            }
-            var currentOtp = response.Content.ReadAsAsync<string>().Result;
-            return currentOtp;
-        }
-    }
-
-    public class Logger
-    {
-        public Logger()
-        {
-        }
-
-        public void Info(string message)
-        {
-            var logger = NLog.LogManager.GetCurrentClassLogger();
-            logger.Info(message);
-        }
-    }
-
     /// <summary>
     /// 驗證使用者身分
     /// </summary>
     public class AuthenticationService
     {
-        private readonly ProfileDao _profileDao = new ProfileDao();
-        private readonly FailedCounter _failedCounter = new FailedCounter();
-        private readonly SlackAdapter _slackAdapter = new SlackAdapter();
-        private readonly Sha256Adapter _sha256Adapter = new Sha256Adapter();
-        private readonly OtpService _otpService;
-        private readonly Logger _logger;
+        private readonly IProfileDao _profileDao;
+        private readonly IFailedCounter _failedCounter;
+        private readonly ISlackAdapter _slackAdapter;
+        private readonly ISha256Adapter _sha256Adapter;
+        private readonly IOtpService _otpService;
+        private readonly ILogger _logger;
+
+        public AuthenticationService(IProfileDao profileDao,IFailedCounter failedCounter,ISlackAdapter slackAdapter,ISha256Adapter sha256Adapter,IOtpService otpService,ILogger logger)
+        {
+            _profileDao = profileDao;
+            _failedCounter = failedCounter;
+            _slackAdapter = slackAdapter;
+            _sha256Adapter = sha256Adapter;
+            _otpService = otpService;
+            _logger = logger;
+        }
 
         public AuthenticationService()
         {
-            _otpService = new OtpService();
-            _logger = new Logger();
+
         }
 
         /// <summary>
@@ -154,7 +42,6 @@ namespace DependencyInjectionWorkshop.Models
         /// <returns></returns>
         public bool Verify(string accountId, string password, string otp)
         {
-
             var isLock = _failedCounter.GetAccountIsLock(accountId);
             if (isLock)
             {
